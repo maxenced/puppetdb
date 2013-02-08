@@ -140,11 +140,17 @@ class puppetdb::server(
 
   @@nagios_service { "check_puppetdb_process_${::fqdn}":
     check_command       => "check_ssh_process!1!3!java!${::ssh_port}",
+    use                 => 'generic-service',
+    host_name           => $::fqdn,
+    notification_period => '24x7',
     service_description => "check_puppetdb_${::fqdn}"
   }
 
   @@nagios_service { "check_puppetdb_connect_${::fqdn}":
     check_command       => 'check_tcp_4!8081',
+    use                 => 'generic-service',
+    host_name           => $::fqdn,
+    notification_period => '24x7',
     service_description => "check_puppedb_connect_${::fqdn}"
   }
 
