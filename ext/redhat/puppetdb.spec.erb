@@ -1,0 +1,258 @@
+%global realname puppetdb
+%global realversion <%= @version %>
+%global rpmversion <%= @rpmversion %>
+
+<% if @pe -%>
+%global open_jdk          pe-java
+<% else -%>
+# Fedora 17 ships with openjdk 1.7.0
+%if 0%{?fedora} >= 17
+%global open_jdk          java-1.7.0-openjdk
+%else
+%if 0%{?suse_version}
+%global open_jdk          java-1_6_0-ibm
+%else
+%global open_jdk          java-1.6.0-openjdk
+%endif
+%endif
+<% end -%>
+
+# On FOSS releases for platforms with ruby 1.9, puppet uses vendorlibdir instead of sitelibdir
+# On PE, we use sitelibdir
+<% if @pe -%>
+%global puppet_libdir     %(PATH=/opt/puppet/bin:$PATH ruby -rrbconfig -e "puts Config::CONFIG['sitelibdir']")
+<% else -%>
+%if 0%{?fedora} >= 17
+%global puppet_libdir     %(ruby -rrbconfig -e "puts Config::CONFIG['vendorlibdir']")
+%else
+%global puppet_libdir     %(ruby -rrbconfig -e "puts Config::CONFIG['sitelibdir']")
+%endif
+<% end -%>
+
+# These macros are not always defined on much older rpm-based systems
+%global  _sharedstatedir /var/lib
+%global  _realsysconfdir /etc
+%global  _initddir   %{_realsysconfdir}/rc.d/init.d
+%global _rundir /var/run
+
+<% if @pe -%>
+%global p_vendor pe
+%global _orig_prefix %{_prefix}
+%global name_prefix  %{p_vendor}-
+%global _sysconfdir /etc/puppetlabs
+%define _lib lib
+%define _prefix /opt/puppet
+<% end -%>
+
+<% if @pe -%>
+Name:          pe-puppetdb
+<% else -%>
+Name:          puppetdb
+<% end -%>
+Version:       <%= @rpmversion %>
+Release:       <%= @rpmrelease %>%{?dist}
+BuildRoot:     %{_tmppath}/%{realname}-%{version}-%{release}-root-%(%{__id_u} -n)
+
+Summary:       Puppet Centralized Storage Daemon
+License:       ASL 2.0
+<% if @pe -%>
+URL:           http://puppetlabs.com/puppet/puppet-enterprise
+Source0:       %{name}-%{realversion}.tar.gz
+<% else -%>
+URL:           http://github.com/puppetlabs/puppetdb
+Source0:       http://downloads.puppetlabs.com/puppetdb/%{realname}-%{realversion}.tar.gz
+<% end -%>
+
+Group:         System Environment/Daemons
+
+<% if @pe -%>
+BuildRequires: pe-facter >= 1.6.2, pe-puppet
+BuildRequires: pe-rubygem-rake
+BuildRequires: pe-ruby
+Requires:      pe-puppet >= 2.7.12
+<% else -%>
+BuildRequires: facter, puppet
+BuildRequires: rubygem-rake
+BuildRequires: ruby
+Requires:      puppet >= 2.7.12
+<% end -%>
+BuildArch:     noarch
+%if 0%{?suse_version}
+BuildRequires: aaa_base
+BuildRequires: unzip
+BuildRequires: sles-release
+Requires:      aaa_base
+Requires:      pwdutils
+%else
+BuildRequires: /usr/sbin/useradd
+Requires:      chkconfig
+%endif
+BuildRequires: %{open_jdk}
+Requires:      %{open_jdk}
+
+%description
+Puppet Centralized Storage.
+
+%package terminus
+Summary: Puppet terminus files to connect to PuppetDB
+Group: Development/Libraries
+<% if @pe -%>
+Requires: pe-puppet >= 2.7.12
+<% else -%>
+Requires: puppet >= 2.7.12
+<% end -%>
+
+%description terminus
+Connect Puppet to PuppetDB by setting up a terminus for PuppetDB.
+
+%prep
+<% if @pe -%>
+%setup -q -n %{name}-%{realversion}
+<% else -%>
+%setup -q -n %{realname}-%{realversion}
+<% end -%>
+
+%build
+
+%install
+%if 0%{?suse_version}
+export NO_BRP_CHECK_BYTECODE_VERSION=true
+%endif
+
+rm -rf $RPM_BUILD_ROOT
+mkdir -p $RPM_BUILD_ROOT/%{_initddir}
+
+<% if @pe -%>
+PATH=/opt/puppet/bin:$PATH rake install PARAMS_FILE= DESTDIR=$RPM_BUILD_ROOT PE_BUILD=true
+PATH=/opt/puppet/bin:$PATH rake terminus PARAMS_FILE= DESTDIR=$RPM_BUILD_ROOT PE_BUILD=true
+<% else -%>
+rake install PARAMS_FILE= DESTDIR= $RPM_BUILD_ROOT
+rake terminus PARAMS_FILE= DESTDIR= $RPM_BUILD_ROOT
+<% end -%>
+
+mkdir -p $RPM_BUILD_ROOT/%{_localstatedir}/log/%{name}
+mkdir -p $RPM_BUILD_ROOT/%{_rundir}/%{name}
+touch  $RPM_BUILD_ROOT/%{_localstatedir}/log/%{name}/%{name}.log
+
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+%pre
+# Here we'll do a little bit of cleanup just in case something went horribly
+# awry during a previous install/uninstall:
+if [ -f "<%= @install_dir %>/start_service_after_upgrade" ] ; then
+   rm <%= @install_dir %>/start_service_after_upgrade
+fi
+# If this is an upgrade (as opposed to an install) then we need to check
+#  and see if the service is running.  If it is, we need to stop it.
+#  we want to shut down and disable the service.
+if [ "$1" = "2" ] ; then
+    if /sbin/service %{name} status > /dev/null ; then
+        # If we need to restart the service after the upgrade
+        #  is finished, we will touch a temp file so that
+        #  we can detect that state
+        touch <%= @install_dir %>/start_service_after_upgrade
+        /sbin/service %{name} stop >/dev/null 2>&1
+    fi
+fi
+# Add PuppetDB user
+getent group %{name} > /dev/null || groupadd -r %{name}
+getent passwd %{name} > /dev/null || \
+useradd -r -g %{name} -d <%= @install_dir %> -s /sbin/nologin \
+     -c "PuppetDB daemon"  %{name}
+
+%post
+<% if @pe -%>
+export PATH=/opt/puppet/bin:$PATH
+<% end -%>
+# If this is an install (as opposed to an upgrade)...
+if [ "$1" = "1" ]; then
+  # Register the puppetDB service
+  /sbin/chkconfig --add %{name}
+fi
+
+<%= @sbin_dir -%>/puppetdb-ssl-setup
+
+<%= ERB.new(File.read("ext/templates/directory_perms.erb")).result %>
+
+
+%preun
+# If this is an uninstall (as opposed to an upgrade) then
+#  we want to shut down and disable the service.
+if [ "$1" = "0" ] ; then
+    /sbin/service %{name} stop >/dev/null 2>&1
+    /sbin/chkconfig --del %{name}
+fi
+
+%postun
+# Remove the rundir if this is an uninstall (as opposed to an upgrade)...
+if [ "$1" = "0" ]; then
+    rm -rf %{_rundir}/%{name} || :
+fi
+
+# If this is an upgrade (as opposed to an install) then we need to check
+#  and see if we stopped the service during the install (we indicate
+#  this via the existence of a temp file that was created during that
+#  phase).  If we did, then we need to restart it.
+if [ "$1" = "1" ] ; then
+    if [ -f "<%= @install_dir %>/start_service_after_upgrade" ] ; then
+        rm <%= @install_dir %>/start_service_after_upgrade
+        /sbin/service %{name} start >/dev/null 2>&1
+    fi
+fi
+
+
+%files
+%defattr(-, root, root)
+%doc *.md
+%doc documentation
+%config(noreplace)%{_sysconfdir}/%{realname}/conf.d/config.ini
+%config(noreplace)%{_sysconfdir}/%{realname}/log4j.properties
+%config(noreplace)%{_sysconfdir}/%{realname}/conf.d/database.ini
+%config(noreplace)%{_sysconfdir}/%{realname}/conf.d/jetty.ini
+%config(noreplace)%{_sysconfdir}/%{realname}/conf.d/repl.ini
+%config(noreplace)%{_realsysconfdir}/sysconfig/%{name}
+%config(noreplace)%{_realsysconfdir}/logrotate.d/%{name}
+%{_sbindir}/puppetdb-ssl-setup
+%{_sbindir}/puppetdb-foreground
+%{_datadir}/%{realname}
+%{_initddir}/%{name}
+<% unless @pe -%>
+%{_sharedstatedir}/%{realname}
+<% end -%>
+%{_datadir}/%{realname}/state
+%dir %{_localstatedir}/log/%{name}
+%ghost %{_localstatedir}/log/%{name}/%{name}.log
+%ghost %{_rundir}/%{name}
+
+
+%files terminus
+<% if @pe -%>
+%defattr(-, pe-puppet, pe-puppet)
+<% else -%>
+%defattr(-, puppet, puppet)
+<% end -%>
+%{puppet_libdir}/puppet/face/node/deactivate.rb
+%{puppet_libdir}/puppet/face/node/status.rb
+%{puppet_libdir}/puppet/indirector/catalog/puppetdb.rb
+%{puppet_libdir}/puppet/indirector/facts/puppetdb.rb
+%{puppet_libdir}/puppet/indirector/node/puppetdb.rb
+%{puppet_libdir}/puppet/indirector/resource/puppetdb.rb
+%{puppet_libdir}/puppet/reports/puppetdb.rb
+%{puppet_libdir}/puppet/util/puppetdb.rb
+%{puppet_libdir}/puppet/util/puppetdb/char_encoding.rb
+%{puppet_libdir}/puppet/util/puppetdb/command.rb
+%{puppet_libdir}/puppet/util/puppetdb/command_names.rb
+%{puppet_libdir}/puppet/util/puppetdb/config.rb
+
+%changelog
+<%
+hostname = `hostname --fqdn`
+dt=`date +"%a %b %d %Y"`
+-%>
+* <%= dt.strip -%> <%= ENV['USER'] -%> <<%= ENV['USER'].strip -%>@<%= hostname.strip -%>> - <%= @rpmversion %>-<%= @rpmrelease -%>
+- Autobuild from Rake task
+
+* Mon Apr 02 2012 Michael Stahnke <stahnma@puppetlabs.com> - 0.1.0-1
+- Initial Packaging

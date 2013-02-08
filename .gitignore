@@ -1,0 +1,11 @@
+pom.xml
+*jar
+/lib/
+/classes/
+/target/
+/docs/
+.lein-failures
+.lein-deps-sum
+*#
+/pkg/
+test-resources/config/local.clj

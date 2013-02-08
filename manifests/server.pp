@@ -144,7 +144,7 @@ class puppetdb::server(
   }
 
   @@nagios_service { "check_puppetdb_connect_${::fqdn}":
-    check_command       => 'check_tcp!8081',
+    check_command       => 'check_tcp_4!8081',
     service_description => "check_puppedb_connect_${::fqdn}"
   }
 
